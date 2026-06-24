@@ -209,7 +209,7 @@ export function normalizeConfig(config: AiConfig): AiConfig {
     imageModel: config.imageModel || config.model || DEFAULT_CONFIG.imageModel,
     quality: config.quality || DEFAULT_CONFIG.quality,
     size: config.size || DEFAULT_CONFIG.size,
-    count: String(Math.max(1, Math.min(10, Number(config.count) || 1))),
+    count: String(Math.max(1, Math.min(4, Number(config.count) || 1))),
     models,
     imageModels,
   };

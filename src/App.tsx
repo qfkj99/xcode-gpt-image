@@ -47,6 +47,7 @@ import type { AiConfig, GeneratedImage, GenerationLog, GenerationResult, Referen
 
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [config, setConfig] = useState<AiConfig>(() => loadConfig());
   const [prompt, setPrompt] = useState("");
   const [references, setReferences] = useState<ReferenceImage[]>([]);
@@ -190,6 +191,7 @@ export default function App() {
         status: successImages.length ? "成功" : "失败",
         images: successImages,
       });
+      setPreviewLog(log);
       setLogs((current) => [log, ...current].slice(0, 100));
       showNotice(successImages.length ? "图片已生成" : firstFailed?.reason?.message || "生成失败");
     } finally {
@@ -233,7 +235,9 @@ export default function App() {
     if (!prompt.trim()) return;
     const snapshot = { prompt: prompt.trim(), references: [...references], config: { ...config, model, imageModel: model, count: "1" } };
     setResults((current) => updateResultAt(current, index, { status: "pending", error: undefined, image: undefined }));
-    void runGenerationSlot(index, snapshot).catch(() => undefined);
+    void runGenerationSlot(index, snapshot)
+      .then((image) => syncRetryToActiveLog(index, image, snapshot))
+      .catch(() => undefined);
   }
 
   async function previewGenerationLog(log: GenerationLog) {
@@ -242,7 +246,54 @@ export default function App() {
     setPrompt(normalized.prompt);
     setReferences(normalized.references || []);
     setConfig((current) => ({ ...current, ...normalized.config, imageModel: normalized.config.imageModel || normalized.model }));
-    setResults(normalized.images.map((image) => ({ id: image.id, status: "success", image })));
+    setResults(
+      normalized.images.length
+        ? normalized.images.map((image) => ({ id: image.id, status: "success", image }))
+        : [{ id: createId("slot"), status: "failed", error: normalized.status === "失败" ? "生成失败，可点击重试" : "没有生成图片" }],
+    );
+  }
+
+  function syncRetryToActiveLog(
+    index: number,
+    image: GeneratedImage,
+    snapshot: { prompt: string; config: AiConfig; references: ReferenceImage[] },
+  ) {
+    const updatedAt = Date.now();
+    setPreviewLog((currentPreviewLog) => {
+      if (!currentPreviewLog) return currentPreviewLog;
+      const nextImages = replaceImageAt(currentPreviewLog.images, index, image);
+      const nextLog: GenerationLog = {
+        ...currentPreviewLog,
+        prompt: snapshot.prompt,
+        title: snapshot.prompt.slice(0, 12) || currentPreviewLog.title || "未命名",
+        model,
+        config: {
+          model: snapshot.config.model,
+          imageModel: snapshot.config.imageModel,
+          quality: snapshot.config.quality,
+          size: snapshot.config.size,
+          count: snapshot.config.count,
+        },
+        references: snapshot.references,
+        images: nextImages,
+        thumbnails: nextImages
+          .map((item) => item.dataUrl)
+          .filter(Boolean)
+          .slice(0, 4),
+        durationMs: image.durationMs,
+        successCount: Math.max(1, currentPreviewLog.successCount || 0),
+        failCount: Math.max(0, (currentPreviewLog.failCount || 1) - 1),
+        imageCount: Math.max(currentPreviewLog.imageCount || 1, index + 1),
+        size: snapshot.config.size,
+        quality: snapshot.config.quality,
+        status: "成功",
+        time: new Date(updatedAt).toLocaleString("zh-CN", { hour12: false }),
+      };
+      setLogs((current) =>
+        current.map((log) => (log.id === nextLog.id ? nextLog : log)).sort((a, b) => b.createdAt - a.createdAt),
+      );
+      return nextLog;
+    });
   }
 
   async function deleteSelectedLogs() {
@@ -267,6 +318,21 @@ export default function App() {
     setSelectedLogIds([]);
     setElapsedMs(0);
     setStartedAt(0);
+  }
+
+  function continueEditWithImage(image: GeneratedImage, index: number) {
+    const reference: ReferenceImage = {
+      id: createId("ref"),
+      name: `generated-result-${index + 1}.png`,
+      type: image.mimeType || "image/png",
+      dataUrl: image.dataUrl,
+      storageKey: image.storageKey,
+    };
+    setReferences((current) => [...current, reference]);
+    showNotice("已加入参考图，可继续输入编辑要求");
+    window.setTimeout(() => {
+      promptInputRef.current?.focus();
+    }, 0);
   }
 
   function updateConfig<K extends keyof AiConfig>(key: K, value: AiConfig[K]) {
@@ -299,7 +365,7 @@ export default function App() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h1 className="text-2xl font-semibold text-stone-950">生图工作台</h1>
-                <p className="mt-1 text-sm text-stone-500">独立提取自 Infinite Canvas 的工作台流程</p>
+                <p className="mt-1 text-sm text-stone-500">生成的图片不会在云端保存记录，请及时保存！</p>
               </div>
               <button className="icon-button" onClick={() => setSettingsOpen(true)} title="接口配置">
                 <Settings size={17} />
@@ -307,7 +373,7 @@ export default function App() {
             </div>
 
             <div className="mt-6 space-y-5">
-              <PromptPanel prompt={prompt} setPrompt={setPrompt} />
+              <PromptPanel prompt={prompt} setPrompt={setPrompt} inputRef={promptInputRef} />
               <ReferencePanel
                 references={references}
                 setReferences={setReferences}
@@ -331,6 +397,7 @@ export default function App() {
             elapsedMs={elapsedMs}
             onRetry={retryResult}
             onPreviewImage={(src, title) => setImagePreview({ src, title })}
+            onContinueEdit={continueEditWithImage}
           />
         </section>
       </main>
@@ -367,13 +434,33 @@ export default function App() {
   );
 }
 
-function PromptPanel({ prompt, setPrompt }: { prompt: string; setPrompt: (value: string) => void }) {
+function PromptPanel({
+  prompt,
+  setPrompt,
+  inputRef,
+}: {
+  prompt: string;
+  setPrompt: (value: string) => void;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+}) {
   return (
     <section>
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-base font-semibold">提示词</span>
+        <button
+          className="small-button"
+          disabled={!prompt}
+          onClick={() => {
+            setPrompt("");
+            window.setTimeout(() => inputRef.current?.focus(), 0);
+          }}
+        >
+          <X size={14} />
+          清空
+        </button>
       </div>
       <textarea
+        ref={inputRef}
         value={prompt}
         onChange={(event) => setPrompt(event.target.value)}
         rows={7}
@@ -478,7 +565,7 @@ function GenerationSettings({
       <div className="space-y-2.5">
         <SettingTitle>生成张数</SettingTitle>
         <div className="grid grid-cols-5 gap-2.5">
-          {Array.from({ length: 5 }, (_, index) => index + 1).map((value) => (
+          {Array.from({ length: 4 }, (_, index) => index + 1).map((value) => (
             <button
               key={value}
               className={count === value ? "option-pill selected" : "option-pill"}
@@ -576,12 +663,14 @@ function ResultPanel({
   elapsedMs,
   onRetry,
   onPreviewImage,
+  onContinueEdit,
 }: {
   results: GenerationResult[];
   running: boolean;
   elapsedMs: number;
   onRetry: (index: number) => void;
   onPreviewImage: (src: string, title: string) => void;
+  onContinueEdit: (image: GeneratedImage, index: number) => void;
 }) {
   return (
     <div className="thin-scrollbar min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-white p-5 shadow-sm">
@@ -590,7 +679,7 @@ function ResultPanel({
         {running ? <span className="tag">等待 {formatDuration(elapsedMs)}</span> : null}
       </div>
       {results.length ? (
-        <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+        <div className="grid auto-rows-auto gap-4 xl:grid-cols-2">
           {results.map((result, index) =>
             result.status === "success" && result.image ? (
               <ResultImageCard
@@ -598,6 +687,7 @@ function ResultPanel({
                 image={result.image}
                 index={index}
                 onPreviewImage={onPreviewImage}
+                onContinueEdit={onContinueEdit}
               />
             ) : result.status === "failed" ? (
               <FailedImageCard key={result.id} error={result.error || "生成失败"} onRetry={() => onRetry(index)} />
@@ -621,18 +711,22 @@ function ResultImageCard({
   image,
   index,
   onPreviewImage,
+  onContinueEdit,
 }: {
   image: GeneratedImage;
   index: number;
   onPreviewImage: (src: string, title: string) => void;
+  onContinueEdit: (image: GeneratedImage, index: number) => void;
 }) {
   const aspectRatio = image.width && image.height ? `${image.width} / ${image.height}` : "1 / 1";
+  const ratio = image.width && image.height ? image.width / image.height : 1;
+  const isWideImage = ratio >= 1.6;
   const title = `生成结果 ${index + 1}`;
 
   return (
-    <div className="overflow-hidden rounded-lg border border-stone-200 bg-white">
+    <div className={isWideImage ? "overflow-hidden rounded-lg border border-stone-200 bg-white xl:col-span-2" : "overflow-hidden rounded-lg border border-stone-200 bg-white"}>
       <div
-        className="group relative flex max-h-[640px] w-full items-center justify-center bg-stone-100"
+        className={isWideImage ? "group relative flex min-h-[360px] max-h-[720px] w-full items-center justify-center bg-stone-100" : "group relative flex min-h-[300px] max-h-[680px] w-full items-center justify-center bg-stone-100"}
         style={{ aspectRatio }}
         onDoubleClick={() => onPreviewImage(image.dataUrl, title)}
         title="双击放大查看"
@@ -652,11 +746,15 @@ function ResultImageCard({
           <span>{formatBytes(image.bytes)}</span>
           <span>{formatDuration(image.durationMs)}</span>
         </div>
-        <div className="grid min-w-0 grid-cols-2 gap-2">
+        <div className="flex min-w-0 flex-wrap gap-2">
           <a className="action-button" href={image.dataUrl} download={`image-${index + 1}.png`}>
             <Download size={14} />
             下载
           </a>
+          <button className="action-button" onClick={() => onContinueEdit(image, index)}>
+            <FolderPlus size={14} />
+            继续编辑
+          </button>
           <button className="action-button" onClick={() => navigator.clipboard.writeText(image.dataUrl)}>
             <PenLine size={14} />
             复制地址
@@ -1099,6 +1197,12 @@ function buildLog({
 
 function updateResultAt(results: GenerationResult[], index: number, next: Partial<GenerationResult>) {
   return results.map((item, itemIndex) => (itemIndex === index ? { ...item, ...next } : item));
+}
+
+function replaceImageAt(images: GeneratedImage[], index: number, image: GeneratedImage) {
+  const next = [...images];
+  next[index] = image;
+  return next.filter(Boolean);
 }
 
 function moveListItem<T>(items: T[], index: number, offset: number) {

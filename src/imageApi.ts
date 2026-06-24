@@ -101,7 +101,7 @@ export function buildApiUrl(baseUrl: string, path: string) {
 }
 
 export function generationCount(count: string) {
-  return Math.max(1, Math.min(10, Math.floor(Math.abs(Number(count)) || 1)));
+  return Math.max(1, Math.min(4, Math.floor(Math.abs(Number(count)) || 1)));
 }
 
 export function imageQualityLabel(value: string) {
