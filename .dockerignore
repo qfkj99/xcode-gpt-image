@@ -1,0 +1,9 @@
+node_modules
+dist
+.npm-cache
+.git
+.agents
+.codex
+npm-debug.log*
+Dockerfile
+README.md
