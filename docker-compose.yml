@@ -1,0 +1,10 @@
+services:
+  xcode-gpt-image:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: xcode-gpt-image:latest
+    container_name: xcode-gpt-image
+    restart: always
+    ports:
+      - "3300:80"
