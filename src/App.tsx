@@ -364,7 +364,7 @@ export default function App() {
           <div className="thin-scrollbar flex min-h-0 flex-col overflow-y-auto rounded-lg border border-stone-200 bg-white p-4 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h1 className="text-2xl font-semibold text-stone-950">生图工作台</h1>
+                <h1 className="text-2xl font-semibold text-stone-950">Xcode 生图工作台</h1>
                 <p className="mt-1 text-sm text-stone-500">生成的图片不会在云端保存记录，请及时保存！</p>
               </div>
               <button className="icon-button" onClick={() => setSettingsOpen(true)} title="接口配置">
