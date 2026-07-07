@@ -27,6 +27,7 @@ import {
   requestEdit,
   requestGeneration,
 } from "./imageApi";
+import type { ApiImage } from "./imageApi";
 import {
   createId,
   clearUrlConfigParams,
@@ -44,6 +45,17 @@ import {
   uploadImage,
 } from "./storage";
 import type { AiConfig, GeneratedImage, GenerationLog, GenerationResult, ReferenceImage } from "./types";
+
+type GenerationSnapshot = {
+  prompt: string;
+  config: AiConfig;
+  references: ReferenceImage[];
+};
+
+type BatchGenerationSummary = {
+  images: GeneratedImage[];
+  error?: string;
+};
 
 export default function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -166,18 +178,14 @@ export default function App() {
     const batchStartedAt = performance.now();
     setStartedAt(batchStartedAt);
 
-    const snapshot = {
+    const snapshot: GenerationSnapshot = {
       prompt: text,
       references: [...references],
       config: { ...config, model, imageModel: model, count: String(count) },
     };
-    const tasks = Array.from({ length: count }, (_, index) => runGenerationSlot(index, snapshot));
-    const settled = await Promise.allSettled(tasks);
-    const successImages = settled
-      .filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled")
-      .map((item) => item.value);
+    const { images: successImages, error } = await runGenerationBatch(snapshot, count);
     const failCount = count - successImages.length;
-    const firstFailed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+    const firstFailed = error ? { reason: new Error(error) } : undefined;
 
     try {
       const log = buildLog({
@@ -199,9 +207,65 @@ export default function App() {
     }
   }
 
+  async function runGenerationBatch(snapshot: GenerationSnapshot, expectedCount: number): Promise<BatchGenerationSummary> {
+    const itemStartedAt = performance.now();
+    try {
+      const images = snapshot.references.length
+        ? await requestEdit(snapshot.config, snapshot.prompt, snapshot.references)
+        : await requestGeneration(snapshot.config, snapshot.prompt);
+      const limitedImages = images.slice(0, expectedCount);
+      const settled = await Promise.allSettled(
+        limitedImages.map(async (image, index) => {
+          try {
+            const nextImage = await persistGeneratedImage(image, itemStartedAt);
+            setResults((current) => updateResultAt(current, index, { status: "success", image: nextImage }));
+            return nextImage;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "生成失败";
+            setResults((current) => updateResultAt(current, index, { status: "failed", error: message }));
+            throw new Error(message);
+          }
+        }),
+      );
+      const successImages = settled
+        .filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled")
+        .map((item) => item.value);
+      const firstFailed = settled.find((item): item is PromiseRejectedResult => item.status === "rejected");
+
+      if (limitedImages.length < expectedCount) {
+        const message = "接口返回图片数量不足";
+        setResults((current) =>
+          current.map((item, index) => (index >= limitedImages.length ? { ...item, status: "failed", error: message } : item)),
+        );
+        return { images: successImages, error: firstFailed?.reason?.message || message };
+      }
+
+      return { images: successImages, error: firstFailed?.reason?.message };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "生成失败";
+      setResults((current) => current.map((item) => ({ ...item, status: "failed", error: message })));
+      return { images: [], error: message };
+    }
+  }
+
+  async function persistGeneratedImage(image: ApiImage, itemStartedAt: number): Promise<GeneratedImage> {
+    const meta = await readImageMeta(image.dataUrl);
+    const stored = await uploadImage(image.dataUrl);
+    return {
+      id: image.id,
+      dataUrl: stored.url,
+      storageKey: stored.storageKey,
+      durationMs: performance.now() - itemStartedAt,
+      width: stored.width || meta.width,
+      height: stored.height || meta.height,
+      bytes: stored.bytes || getDataUrlByteSize(image.dataUrl),
+      mimeType: stored.mimeType,
+    };
+  }
+
   async function runGenerationSlot(
     index: number,
-    snapshot: { prompt: string; config: AiConfig; references: ReferenceImage[] },
+    snapshot: GenerationSnapshot,
   ) {
     const itemStartedAt = performance.now();
     try {
@@ -233,7 +297,7 @@ export default function App() {
 
   function retryResult(index: number) {
     if (!prompt.trim()) return;
-    const snapshot = { prompt: prompt.trim(), references: [...references], config: { ...config, model, imageModel: model, count: "1" } };
+    const snapshot: GenerationSnapshot = { prompt: prompt.trim(), references: [...references], config: { ...config, model, imageModel: model, count: "1" } };
     setResults((current) => updateResultAt(current, index, { status: "pending", error: undefined, image: undefined }));
     void runGenerationSlot(index, snapshot)
       .then((image) => syncRetryToActiveLog(index, image, snapshot))
@@ -256,7 +320,7 @@ export default function App() {
   function syncRetryToActiveLog(
     index: number,
     image: GeneratedImage,
-    snapshot: { prompt: string; config: AiConfig; references: ReferenceImage[] },
+    snapshot: GenerationSnapshot,
   ) {
     const updatedAt = Date.now();
     setPreviewLog((currentPreviewLog) => {
