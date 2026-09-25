@@ -161,8 +161,20 @@ async function readPayload(response: Response): Promise<ImageApiResponse> {
 
 function resolveImageDataUrl(item: Record<string, unknown>) {
   if (typeof item.b64_json === "string" && item.b64_json) return `data:image/png;base64,${item.b64_json}`;
-  if (typeof item.url === "string" && item.url) return item.url;
+  if (typeof item.url === "string" && item.url) return normalizeImageUrl(item.url);
   return null;
+}
+
+/**
+ * Some OpenAI-compatible providers return a Markdown link in `url` instead of
+ * the raw image URL (for example, `[https://...](https://...)`).  An `<img>`
+ * element cannot resolve that Markdown string, so unwrap the destination while
+ * keeping ordinary URLs unchanged.
+ */
+function normalizeImageUrl(value: string) {
+  const trimmed = value.trim();
+  const markdownLink = trimmed.match(/^!?\[[^\]]*\]\(\s*(https?:\/\/[^)\s]+)\s*\)$/i);
+  return markdownLink?.[1] || trimmed;
 }
 
 function aiHeaders(config: AiConfig, contentType?: string) {

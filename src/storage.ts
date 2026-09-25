@@ -132,6 +132,21 @@ export async function normalizeLog(log: GenerationLog): Promise<GenerationLog> {
 }
 
 export async function uploadImage(input: Blob | File | string) {
+  // API providers may return a hosted image URL rather than a data URL. Keep
+  // that URL as-is: fetching it here would require CORS headers and converting
+  // an arbitrary URL with dataUrlToBlob would produce an empty image blob.
+  if (typeof input === "string" && !input.startsWith("data:")) {
+    const meta = await readImageMeta(input);
+    return {
+      id: createId("image"),
+      url: input,
+      width: meta.width,
+      height: meta.height,
+      bytes: 0,
+      mimeType: undefined,
+    };
+  }
+
   const blob = typeof input === "string" ? dataUrlToBlob(input) : input;
   const id = createId("image");
   const storageKey = `image:${id}`;
@@ -154,7 +169,7 @@ export async function uploadImage(input: Blob | File | string) {
 export async function resolveImageUrl(storageKey?: string, fallback = "") {
   if (!storageKey) return fallback;
   const blob = await getImageBlob(storageKey);
-  return blob ? URL.createObjectURL(blob) : fallback;
+  return blob && blob.size > 0 ? URL.createObjectURL(blob) : fallback;
 }
 
 export async function resolveImageBlob(image: ReferenceImage): Promise<Blob> {
