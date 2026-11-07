@@ -37,8 +37,10 @@ export function readUrlConfig() {
   const apiKey = params.get("apiKey") || params.get("key") || "";
   const baseUrl = params.get("baseUrl") || params.get("url") || "";
   const model = params.get("model") || params.get("imageModel") || "";
-  if (!apiKey && !baseUrl && !model) return null;
-  return { apiKey, baseUrl, model };
+  // Comma-separated list of the only models the embedding site offers.
+  const models = unique((params.get("models") || "").split(","));
+  if (!apiKey && !baseUrl && !model && !models.length) return null;
+  return { apiKey, baseUrl, model, models };
 }
 
 export function hasUrlConfig() {
@@ -48,7 +50,7 @@ export function hasUrlConfig() {
 export function clearUrlConfigParams() {
   if (typeof window === "undefined") return;
   const url = new URL(window.location.href);
-  const sensitiveKeys = ["apiKey", "key", "baseUrl", "url", "model", "imageModel"];
+  const sensitiveKeys = ["apiKey", "key", "baseUrl", "url", "model", "imageModel", "models"];
   let changed = false;
   sensitiveKeys.forEach((key) => {
     if (url.searchParams.has(key)) {
@@ -64,13 +66,33 @@ export function clearUrlConfigParams() {
 function applyUrlConfig(config: AiConfig): AiConfig {
   const imported = readUrlConfig();
   if (!imported) return normalizeConfig(config);
-  return normalizeConfig({
-    ...config,
+  const connection = {
     ...(imported.apiKey ? { apiKey: imported.apiKey } : {}),
     ...(imported.baseUrl ? { baseUrl: imported.baseUrl } : {}),
+  };
+  if (imported.models.length) {
+    // The site manages the list: replace the saved list instead of merging into it.
+    const models = unique([imported.model, ...imported.models]);
+    const current = config.imageModel || config.model;
+    // Keep the user's last pick while the site still offers it; otherwise use the site default.
+    const selected = config.modelsLocked && models.includes(current) ? current : models[0];
+    return normalizeConfig({
+      ...config,
+      ...connection,
+      model: selected,
+      imageModel: selected,
+      models,
+      imageModels: models,
+      modelsLocked: true,
+    });
+  }
+  return normalizeConfig({
+    ...config,
+    ...connection,
     ...(imported.model ? { model: imported.model, imageModel: imported.model } : {}),
     models: imported.model ? [imported.model, ...config.models] : config.models,
     imageModels: imported.model ? [imported.model, ...config.imageModels] : config.imageModels,
+    modelsLocked: false,
   });
 }
 
@@ -213,11 +235,23 @@ export function createId(prefix: string) {
 }
 
 export function normalizeConfig(config: AiConfig): AiConfig {
+  const lockedModels = config.modelsLocked ? unique(config.models || []) : [];
+  if (lockedModels.length) {
+    const current = config.imageModel || config.model;
+    config = {
+      ...config,
+      model: lockedModels.includes(current) ? current : lockedModels[0],
+      imageModel: lockedModels.includes(current) ? current : lockedModels[0],
+      models: lockedModels,
+      imageModels: lockedModels,
+    };
+  }
   const models = unique([...(config.models || []), config.model, config.imageModel]);
   const imageModels = unique([...(config.imageModels || []), config.imageModel, config.model]);
   return {
     ...DEFAULT_CONFIG,
     ...config,
+    modelsLocked: lockedModels.length > 0,
     baseUrl: config.baseUrl || DEFAULT_CONFIG.baseUrl,
     apiFormat: config.apiFormat === "gemini" ? "gemini" : "openai",
     model: config.imageModel || config.model || DEFAULT_CONFIG.model,
