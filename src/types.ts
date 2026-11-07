@@ -12,6 +12,8 @@ export type AiConfig = {
   systemPrompt: string;
   models: string[];
   imageModels: string[];
+  /** True when the model list was supplied by the embedding site (`models` URL parameter). */
+  modelsLocked?: boolean;
 };
 
 export type ReferenceImage = {

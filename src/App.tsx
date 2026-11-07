@@ -38,6 +38,7 @@ import {
   hasUrlConfig,
   loadConfig,
   loadLogs,
+  normalizeConfig,
   normalizeLog,
   readImageMeta,
   saveConfig,
@@ -309,7 +310,19 @@ export default function App() {
     setPreviewLog(normalized);
     setPrompt(normalized.prompt);
     setReferences(normalized.references || []);
-    setConfig((current) => ({ ...current, ...normalized.config, imageModel: normalized.config.imageModel || normalized.model }));
+    setConfig((current) => {
+      // Restore only the logged generation parameters; never let an old log replace
+      // the current model list. normalizeConfig drops a model the site no longer offers.
+      const { model: loggedModel, imageModel: loggedImageModel, quality, size, count } = normalized.config;
+      const restoredModel = loggedImageModel || loggedModel || normalized.model;
+      return normalizeConfig({
+        ...current,
+        ...(quality ? { quality } : {}),
+        ...(size ? { size } : {}),
+        ...(count ? { count } : {}),
+        ...(restoredModel ? { model: restoredModel, imageModel: restoredModel } : {}),
+      });
+    });
     setResults(
       normalized.images.length
         ? normalized.images.map((image) => ({ id: image.id, status: "success", image }))
@@ -657,10 +670,15 @@ function ModelInput({
   value: string;
   onChange: (value: string) => void;
 }) {
-  const options = Array.from(new Set([value, ...config.imageModels, ...config.models].filter(Boolean)));
+  // A site-managed list is the complete set of choices; otherwise users may type any model.
+  const options = config.modelsLocked
+    ? config.models
+    : Array.from(new Set([value, ...config.imageModels, ...config.models].filter(Boolean)));
   return (
     <div className="space-y-2">
-      <input className="field-input" value={value} onChange={(event) => onChange(event.target.value)} placeholder="gpt-image-2" />
+      {!config.modelsLocked && (
+        <input className="field-input" value={value} onChange={(event) => onChange(event.target.value)} placeholder="gpt-image-2" />
+      )}
       <div className="flex flex-wrap gap-2">
         {options.map((item) => (
           <button key={item} className={item === value ? "model-chip selected" : "model-chip"} onClick={() => onChange(item)}>
@@ -1092,12 +1110,26 @@ function ConfigModal({
           </label>
           <label>
             <span className="field-label">默认生图模型</span>
-            <input
-              className="field-input"
-              value={draft.imageModel}
-              onChange={(event) => update("imageModel", event.target.value)}
-              placeholder="gpt-image-2"
-            />
+            {draft.modelsLocked ? (
+              <select
+                className="field-input"
+                value={draft.imageModel}
+                onChange={(event) => update("imageModel", event.target.value)}
+              >
+                {draft.models.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                className="field-input"
+                value={draft.imageModel}
+                onChange={(event) => update("imageModel", event.target.value)}
+                placeholder="gpt-image-2"
+              />
+            )}
           </label>
           <label>
             <span className="field-label">可选模型，每行一个</span>
@@ -1106,7 +1138,11 @@ function ConfigModal({
               value={modelText}
               onChange={(event) => setModelText(event.target.value)}
               placeholder="gpt-image-2"
+              readOnly={draft.modelsLocked}
             />
+            {draft.modelsLocked && (
+              <span className="mt-1 block text-xs text-stone-500">可选模型由站点管理员配置，每次从站点打开时自动同步。</span>
+            )}
           </label>
           <label>
             <span className="field-label">系统提示词，可选</span>
@@ -1128,6 +1164,13 @@ function ConfigModal({
           <button
             className="primary-button"
             onClick={() => {
+              if (draft.modelsLocked) {
+                // The site-managed list is not editable here; only the default pick changes.
+                setConfig({ ...draft, model: draft.imageModel });
+                onClose();
+                onNotice("配置已保存");
+                return;
+              }
               const models = modelText
                 .split(/\r?\n|,/)
                 .map((item) => item.trim())
