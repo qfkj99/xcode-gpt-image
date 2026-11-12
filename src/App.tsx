@@ -1092,7 +1092,7 @@ function ConfigModal({
               className="field-input"
               value={draft.baseUrl}
               onChange={(event) => update("baseUrl", event.target.value)}
-              placeholder="https://xcode.best"
+              placeholder="https://xcodebest.com"
             />
             <span className="mt-1 block text-xs text-stone-500">
               会自动补齐 OpenAI 兼容路径，例如 `/v1/images/generations`。

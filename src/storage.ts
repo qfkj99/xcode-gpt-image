@@ -7,7 +7,7 @@ const DB_VERSION = 1;
 const IMAGE_STORE = "image_files";
 
 export const DEFAULT_CONFIG: AiConfig = {
-  baseUrl: "https://xcode.best",
+  baseUrl: "https://xcodebest.com",
   apiKey: "",
   apiFormat: "openai",
   model: "gpt-image-2",
